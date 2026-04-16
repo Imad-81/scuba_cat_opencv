@@ -2,18 +2,20 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import time
-import subprocess
-import os
 
 # -------------------------------
 # SETTINGS
 # -------------------------------
-WAVE_HISTORY = 60
-WAVE_THRESHOLD = 600
+WAVE_HISTORY = 30
+WAVE_THRESHOLD = 300
 COOLDOWN = 3
 VIDEO_PATH = "scuba_cat.MP4"
 
-NOSE_JUMP_THRESHOLD = 5  # key for detecting cover
+# -------------------------------
+# VIDEO STATE
+# -------------------------------
+video_cap = None
+playing_video = False
 
 # -------------------------------
 # INIT
@@ -28,7 +30,6 @@ cap = cv2.VideoCapture(0)
 
 wave_positions = []
 last_trigger_time = 0
-prev_nose = None
 
 
 # -------------------------------
@@ -50,11 +51,13 @@ def detect_wave(positions):
 
 
 def play_video():
-    subprocess.Popen([
-        "/Applications/VLC.app/Contents/MacOS/VLC",
-        "--play-and-exit",
-        VIDEO_PATH
-    ])
+    global video_cap, playing_video
+
+    if playing_video:
+        return
+
+    video_cap = cv2.VideoCapture(VIDEO_PATH)
+    playing_video = True
 
 
 # -------------------------------
@@ -78,11 +81,8 @@ while True:
     waving = False
 
     # -------------------------------
-    # NOSE DETECTION (STABILITY BASED)
+    # NOSE + HAND OVERLAP DETECTION
     # -------------------------------
-    nose = None
-    nose_covered = False
-
     if face_results.multi_face_landmarks:
         face_landmarks = face_results.multi_face_landmarks[0]
         nose_landmark = face_landmarks.landmark[1]
@@ -93,13 +93,11 @@ while True:
 
         cv2.circle(frame, nose, 5, (0, 255, 0), -1)
 
-        # Define nose "hitbox"
         NOSE_RADIUS = 75
 
         if hand_results.multi_hand_landmarks:
             for hand_landmarks in hand_results.multi_hand_landmarks:
 
-                # Check all fingertips
                 fingertip_ids = [4, 8, 12, 16, 20]
 
                 for tip_id in fingertip_ids:
@@ -108,15 +106,15 @@ while True:
 
                     cv2.circle(frame, (tx, ty), 5, (255, 255, 0), -1)
 
-                    # 🔥 KEY CHECK
                     if distance((tx, ty), nose) < NOSE_RADIUS:
                         nose_covered = True
                         break
 
                 if nose_covered:
                     break
-        # -------------------------------
-    # HAND PROCESSING (WAVE)
+
+    # -------------------------------
+    # WAVE DETECTION
     # -------------------------------
     if hand_results.multi_hand_landmarks:
         hand_centers = []
@@ -135,7 +133,6 @@ while True:
             hand_centers.append((cx, cy))
             cv2.circle(frame, (cx, cy), 8, (255, 0, 0), -1)
 
-        # Pick hand farthest from nose (likely waving)
         if nose:
             hand_centers.sort(key=lambda p: distance(p, nose), reverse=True)
 
@@ -159,6 +156,20 @@ while True:
         print("SCUBA CAT TRIGGERED 🐱🌊")
         play_video()
         last_trigger_time = current_time
+
+    # -------------------------------
+    # VIDEO WINDOW (SEPARATE)
+    # -------------------------------
+    if playing_video:
+        ret_vid, frame_vid = video_cap.read()
+
+        if not ret_vid:
+            playing_video = False
+            video_cap.release()
+            cv2.destroyWindow("Meme Player")
+        else:
+            frame_vid = cv2.resize(frame_vid, (480, 360))
+            cv2.imshow("Meme Player", frame_vid)
 
     # -------------------------------
     # DEBUG TEXT

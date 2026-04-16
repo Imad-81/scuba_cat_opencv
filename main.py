@@ -2,16 +2,18 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import time
+import subprocess
 import os
 
 # -------------------------------
 # SETTINGS
 # -------------------------------
-NOSE_DISTANCE_THRESHOLD = 60   # pixels (tweak if needed)
-WAVE_HISTORY = 12              # number of frames to track
-WAVE_THRESHOLD = 40            # min movement in pixels
-COOLDOWN = 3                   # seconds between triggers
-VIDEO_PATH = "scuba_cat.MP4"       # your meme video
+WAVE_HISTORY = 60
+WAVE_THRESHOLD = 600
+COOLDOWN = 3
+VIDEO_PATH = "scuba_cat.MP4"
+
+NOSE_JUMP_THRESHOLD = 5  # key for detecting cover
 
 # -------------------------------
 # INIT
@@ -26,12 +28,12 @@ cap = cv2.VideoCapture(0)
 
 wave_positions = []
 last_trigger_time = 0
+prev_nose = None
 
 
 # -------------------------------
-# HELPER FUNCTIONS
+# HELPERS
 # -------------------------------
-
 def distance(p1, p2):
     return np.linalg.norm(np.array(p1) - np.array(p2))
 
@@ -40,20 +42,19 @@ def detect_wave(positions):
     if len(positions) < WAVE_HISTORY:
         return False
 
-    # Check left-right movement
     diffs = np.diff(positions)
     sign_changes = np.sum(np.diff(np.sign(diffs)) != 0)
-
     total_movement = max(positions) - min(positions)
 
     return sign_changes >= 2 and total_movement > WAVE_THRESHOLD
 
 
 def play_video():
-    # Mac
-    os.system(f"open {VIDEO_PATH}")
-    # Windows alternative:
-    # os.startfile(VIDEO_PATH)
+    subprocess.Popen([
+        "/Applications/VLC.app/Contents/MacOS/VLC",
+        "--play-and-exit",
+        VIDEO_PATH
+    ])
 
 
 # -------------------------------
@@ -77,18 +78,45 @@ while True:
     waving = False
 
     # -------------------------------
-    # GET NOSE POSITION
+    # NOSE DETECTION (STABILITY BASED)
     # -------------------------------
+    nose = None
+    nose_covered = False
+
     if face_results.multi_face_landmarks:
         face_landmarks = face_results.multi_face_landmarks[0]
+        nose_landmark = face_landmarks.landmark[1]
 
-        nose_landmark = face_landmarks.landmark[1]  # nose tip
-        nose = (int(nose_landmark.x * w), int(nose_landmark.y * h))
+        nx = int(nose_landmark.x * w)
+        ny = int(nose_landmark.y * h)
+        nose = (nx, ny)
 
         cv2.circle(frame, nose, 5, (0, 255, 0), -1)
 
-    # -------------------------------
-    # HAND PROCESSING
+        # Define nose "hitbox"
+        NOSE_RADIUS = 75
+
+        if hand_results.multi_hand_landmarks:
+            for hand_landmarks in hand_results.multi_hand_landmarks:
+
+                # Check all fingertips
+                fingertip_ids = [4, 8, 12, 16, 20]
+
+                for tip_id in fingertip_ids:
+                    tip = hand_landmarks.landmark[tip_id]
+                    tx, ty = int(tip.x * w), int(tip.y * h)
+
+                    cv2.circle(frame, (tx, ty), 5, (255, 255, 0), -1)
+
+                    # 🔥 KEY CHECK
+                    if distance((tx, ty), nose) < NOSE_RADIUS:
+                        nose_covered = True
+                        break
+
+                if nose_covered:
+                    break
+        # -------------------------------
+    # HAND PROCESSING (WAVE)
     # -------------------------------
     if hand_results.multi_hand_landmarks:
         hand_centers = []
@@ -105,38 +133,25 @@ while True:
             cy = int(np.mean(ys))
 
             hand_centers.append((cx, cy))
-
             cv2.circle(frame, (cx, cy), 8, (255, 0, 0), -1)
 
-        # -------------------------------
-        # CHECK NOSE COVER
-        # -------------------------------
+        # Pick hand farthest from nose (likely waving)
         if nose:
-            for hc in hand_centers:
-                if distance(hc, nose) < NOSE_DISTANCE_THRESHOLD:
-                    nose_covered = True
+            hand_centers.sort(key=lambda p: distance(p, nose), reverse=True)
 
-        # -------------------------------
-        # TRACK WAVE (use the OTHER hand)
-        # -------------------------------
-        if len(hand_centers) >= 1:
-            # pick the hand farthest from nose (likely waving hand)
-            if nose:
-                hand_centers.sort(key=lambda p: distance(p, nose), reverse=True)
+        wave_hand = hand_centers[0]
+        wave_positions.append(wave_hand[0])
 
-            wave_hand = hand_centers[0]
-            wave_positions.append(wave_hand[0])
+        if len(wave_positions) > WAVE_HISTORY:
+            wave_positions.pop(0)
 
-            if len(wave_positions) > WAVE_HISTORY:
-                wave_positions.pop(0)
-
-            waving = detect_wave(wave_positions)
+        waving = detect_wave(wave_positions)
 
     else:
         wave_positions.clear()
 
     # -------------------------------
-    # TRIGGER CONDITION
+    # TRIGGER
     # -------------------------------
     current_time = time.time()
 

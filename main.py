@@ -26,7 +26,7 @@ mp_face = mp.solutions.face_mesh
 hands = mp_hands.Hands(max_num_hands=2)
 face = mp_face.FaceMesh(refine_landmarks=True)
 
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0) #Change number to 0 for it to use the best camera available. 
 
 wave_positions = []
 last_trigger_time = 0
